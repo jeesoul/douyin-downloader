@@ -15,6 +15,17 @@ class DownloadCancelled(DownloadError):
     pass
 
 
+class MediaRejectedError(DownloadError):
+    """原始内容不符合素材策略，独立于连接、超时及格式错误。"""
+
+
+class DynamicSourceUnavailable(DownloadError):
+    def __init__(self, message: str, files: tuple[Path, ...], policy_rejected: bool):
+        super().__init__(message)
+        self.files = files
+        self.policy_rejected = policy_rejected
+
+
 @dataclass(frozen=True)
 class ResolvedLink:
     aweme_id: str
@@ -62,3 +73,4 @@ class DownloadOptions:
 class DownloadResult:
     files: list[Path]
     warnings: list[str] = field(default_factory=list)
+    unavailable_motion: tuple[int, ...] = ()

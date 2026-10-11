@@ -129,7 +129,10 @@ def parse_content(aweme: dict, aweme_id: str) -> Content:
             )
         images.append(addresses)
         video = item.get("video") or {}
-        live = video_urls(video.get("play_addr")) or video_urls(video.get("play_addr_h265"))
+        candidates = [address for quality in quality_list(video) for address in quality.urls]
+        for key in ("play_addr_h264", "play_addr_h265", "play_addr_lowbr"):
+            candidates.extend(video_urls(video.get(key)))
+        live = tuple(dict.fromkeys(candidates))
         if live:
             image_videos[index] = live
         elif item.get("live_photo_type") == 1:

@@ -55,6 +55,33 @@ class LinkTests(unittest.TestCase):
 
 
 class ContentTests(unittest.TestCase):
+    def test_all_declared_dynamic_candidates_are_available_for_fallback(self):
+        content = parse_content(
+            {
+                "images": [
+                    {
+                        "url_list": ["https://images.example/still.jpg"],
+                        "video": {
+                            "play_addr": [{"src": "https://v.douyinvod.com/primary.mp4"}],
+                            "bit_rate_list": [
+                                {
+                                    "gear_name": "720",
+                                    "bit_rate": 200,
+                                    "play_addr": [{"src": "https://v.douyinvod.com/bitrate.mp4"}],
+                                }
+                            ],
+                            "play_addr_h264": [{"src": "https://v.douyinvod.com/h264.mp4"}],
+                            "play_addr_h265": [{"src": "https://v.douyinvod.com/h265.mp4"}],
+                            "play_addr_lowbr": [{"src": "https://v.douyinvod.com/low.mp4"}],
+                        },
+                    }
+                ]
+            },
+            "123",
+        )
+        self.assertEqual(len(content.image_videos[0]), 5)
+        self.assertIn("https://v.douyinvod.com/h265.mp4", content.image_videos[0])
+
     def test_src_object_addresses_preserve_dynamic_video(self):
         address = "https://v.douyinvod.com/motion.mp4"
         content = parse_content(

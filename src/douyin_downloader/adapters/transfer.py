@@ -7,7 +7,7 @@ from pathlib import Path
 
 import requests
 
-from ..domain.models import DownloadCancelled, DownloadError, TransferCallback
+from ..domain.models import DownloadCancelled, DownloadError, MediaRejectedError, TransferCallback
 from ..infrastructure.assets import require_accepted_asset, sha256
 from ..infrastructure.runtime import check_cancel, redact
 from .douyin.addresses import is_watermarked_url
@@ -44,17 +44,18 @@ def download_asset(
     if cookies:
         headers["Cookie"] = "; ".join(f"{c['name']}={c['value']}" for c in cookies)
     failures = []
+    rejections = []
     for url in urls:
         check_cancel(cancel)
         if is_watermarked_url(url):
-            failures.append("Watermarked media address rejected.")
+            rejections.append("Watermarked media address rejected.")
             continue
         temporary = None
         try:
             with requests.get(url, headers=headers, stream=True, timeout=(10, 30)) as response:
                 response.raise_for_status()
                 if is_watermarked_url(response.url):
-                    raise DownloadError("Redirected to a watermarked media address.")
+                    raise MediaRejectedError("Redirected to a watermarked media address.")
                 media_type = response.headers.get("Content-Type", "").split(";")[0].strip().lower()
                 if media_type.startswith("text/") or "json" in media_type:
                     raise DownloadError("The server returned a page instead of media.")
@@ -121,10 +122,14 @@ def download_asset(
                 return target
         except DownloadCancelled:
             raise
+        except MediaRejectedError as exc:
+            rejections.append(redact(str(exc)))
         except (requests.RequestException, OSError, ValueError, DownloadError) as exc:
             failures.append(f"{type(exc).__name__}: {redact(str(exc))}")
         finally:
             if temporary and temporary.exists():
                 temporary.unlink()
+    if rejections and not failures:
+        raise MediaRejectedError(rejections[-1])
     reason = failures[-1] if failures else "No downloadable addresses."
     raise DownloadError(f"All {len(urls)} media addresses failed. {reason}")

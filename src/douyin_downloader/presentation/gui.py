@@ -7,7 +7,12 @@ import threading
 from pathlib import Path
 
 from .. import __version__
-from ..domain.models import DownloadCancelled, DownloadOptions
+from ..domain.models import (
+    DownloadCancelled,
+    DownloadOptions,
+    DynamicSourceUnavailable,
+    MediaRejectedError,
+)
 from ..infrastructure.runtime import redact
 
 LOGGER = logging.getLogger(__name__)
@@ -220,6 +225,13 @@ class DownloaderApp:
                 self.events.put(("done", result))
             except DownloadCancelled:
                 self.events.put(("cancelled", None))
+            except DynamicSourceUnavailable as exc:
+                kind = "source-rejected" if exc.policy_rejected else "partial-error"
+                LOGGER.warning("%s: %s", type(exc).__name__, redact(str(exc)))
+                self.events.put((kind, exc))
+            except MediaRejectedError as exc:
+                LOGGER.warning("%s: %s", type(exc).__name__, redact(str(exc)))
+                self.events.put(("source-rejected", exc))
             except Exception as exc:
                 message = redact(str(exc))
                 LOGGER.error("%s: %s", type(exc).__name__, message)
@@ -233,7 +245,7 @@ class DownloaderApp:
         self.progress.stop()
         self.progress.configure(mode="determinate", maximum=100, value=100 if kind == "done" else 0)
         self.download_button.configure(
-            state="normal", text="Download" if kind == "done" else "Retry"
+            state="normal", text="Download" if kind in {"done", "source-rejected"} else "Retry"
         )
         self.close_button.configure(state="normal", text="Close")
         self.link.configure(state="normal")
@@ -243,9 +255,15 @@ class DownloaderApp:
             self.root.destroy()
             return
         if kind == "done":
-            self.exit_code = 0
+            self.exit_code = 2 if value.unavailable_motion else 0
             self.status.configure(
-                text="Completed with warnings" if value.warnings else "Done!",
+                text=(
+                    "Originals saved; dynamic source unavailable"
+                    if value.unavailable_motion
+                    else "Completed with warnings"
+                    if value.warnings
+                    else "Done!"
+                ),
                 foreground="#996000" if value.warnings else "#1e8e3e",
             )
             self.set_detail(
@@ -254,6 +272,20 @@ class DownloaderApp:
             self.saved_folder = value.files[0].parent if value.files else self.options.output_dir
             self.folder_button.configure(state="normal")
             self.stats.configure(text=f"{len(value.files)} file(s) saved")
+        elif kind in {"source-rejected", "partial-error"}:
+            self.exit_code = 3 if kind == "source-rejected" else 1
+            self.status.configure(
+                text="Source rejected" if kind == "source-rejected" else "Download incomplete",
+                foreground="#996000" if kind == "source-rejected" else "#d93025",
+            )
+            saved_files = getattr(value, "files", ())
+            lines = [redact(str(value))]
+            if saved_files:
+                lines.extend(["", "Saved files:", *(str(path) for path in saved_files)])
+                self.saved_folder = saved_files[0].parent
+                self.folder_button.configure(state="normal")
+            self.set_detail("\n".join(lines))
+            self.stats.configure(text=f"{len(saved_files)} accepted file(s) saved")
         elif kind == "error":
             self.status.configure(text="Download failed", foreground="#d93025")
             self.set_detail(value)
@@ -269,7 +301,7 @@ class DownloaderApp:
                 kind, value = self.events.get_nowait()
             except queue.Empty:
                 break
-            if kind in {"done", "error", "cancelled"}:
+            if kind in {"done", "error", "cancelled", "source-rejected", "partial-error"}:
                 self.finish(kind, value)
                 if self.closing:
                     return

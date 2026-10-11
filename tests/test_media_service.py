@@ -16,6 +16,8 @@ from douyin_downloader.domain.models import (
     DownloadCancelled,
     DownloadError,
     DownloadOptions,
+    DynamicSourceUnavailable,
+    MediaRejectedError,
 )
 from douyin_downloader.infrastructure.assets import record_rejected_asset
 
@@ -153,8 +155,129 @@ class ServiceTests(unittest.TestCase):
         ):
             first = run_download(self.options)
             record_rejected_asset(first.files[0], "Embedded mark verified.")
-            with self.assertRaisesRegex(DownloadError, "Known watermarked"):
+            with patch(
+                "douyin_downloader.application.service.download_asset",
+                side_effect=MediaRejectedError("Source is still rejected"),
+            ) as fresh:
+                with self.assertRaises(MediaRejectedError):
+                    run_download(self.options)
+                fresh.assert_called_once()
+
+    def test_rejected_cached_asset_does_not_block_a_new_accepted_source(self):
+        with (
+            patch(
+                "douyin_downloader.application.service.capture_content",
+                return_value=(self.content, []),
+            ),
+            patch(
+                "douyin_downloader.application.service.download_asset", side_effect=self.write_photo
+            ),
+            patch(
+                "douyin_downloader.infrastructure.assets.validation_path",
+                return_value=self.folder / "validation.json",
+            ),
+        ):
+            first = run_download(self.options)
+            record_rejected_asset(first.files[0], "Rejected old content")
+
+            def new_source(urls, path, *_):
+                target = path.with_suffix(".png")
+                Image.new("RGB", (20, 30), "blue").save(target)
+                return target
+
+            with patch(
+                "douyin_downloader.application.service.download_asset", side_effect=new_source
+            ):
+                second = run_download(self.options)
+            with Image.open(second.files[0]) as image:
+                self.assertEqual(image.getpixel((0, 0)), (0, 0, 255))
+
+    def test_originals_mode_preserves_images_and_music_when_motion_is_rejected(self):
+        self.content.image_videos = {0: ("https://example/motion",)}
+        self.content.music_urls = ("https://example/music",)
+
+        def transfer(addresses, path, cookies, kind, *_):
+            if kind == "video":
+                raise MediaRejectedError("Embedded watermark")
+            if kind == "audio":
+                path.write_bytes(b"audio fixture")
+                return path
+            return self.write_photo(addresses, path)
+
+        with (
+            patch(
+                "douyin_downloader.application.service.capture_content",
+                return_value=(self.content, []),
+            ),
+            patch("douyin_downloader.application.service.download_asset", side_effect=transfer),
+            patch("douyin_downloader.application.service.compose_slideshow") as compose,
+        ):
+            result = run_download(
+                DownloadOptions(self.options.link, self.folder, photo_mode="originals")
+            )
+            self.assertEqual(result.unavailable_motion, (1,))
+            self.assertEqual([path.suffix for path in result.files], [".png", ".mp3"])
+            self.assertTrue(all(path.is_file() for path in result.files))
+            compose.assert_not_called()
+        metadata = json.loads(next(self.folder.rglob("metadata.json")).read_text(encoding="utf-8"))
+        self.assertEqual(metadata["state"], "partial")
+        self.assertEqual(metadata["unavailable_motion"], [1])
+
+    def test_missing_cached_files_are_not_reported_in_partial_metadata(self):
+        with (
+            patch(
+                "douyin_downloader.application.service.capture_content",
+                return_value=(self.content, []),
+            ),
+            patch(
+                "douyin_downloader.application.service.download_asset", side_effect=self.write_photo
+            ),
+        ):
+            first = run_download(self.options)
+            metadata_path = first.files[0].parent / "metadata.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata["files"].append({"name": "missing.mp4", "size": 42, "sha256": "missing"})
+            metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+            self.content.image_videos = {0: ("https://example/rejected",)}
+            with patch(
+                "douyin_downloader.application.service.download_asset",
+                side_effect=MediaRejectedError("Embedded watermark"),
+            ):
+                run_download(
+                    DownloadOptions(self.options.link, self.folder, photo_mode="originals")
+                )
+        updated = json.loads(metadata_path.read_text(encoding="utf-8"))
+        self.assertNotIn("missing.mp4", [record["name"] for record in updated["files"]])
+
+    def test_both_mode_exposes_preserved_files_and_policy_rejection(self):
+        self.content.image_videos = {0: ("https://example/motion",)}
+        self.content.music_urls = ("https://example/music",)
+
+        def transfer(addresses, path, cookies, kind, *_):
+            if kind == "video":
+                raise MediaRejectedError("Embedded watermark")
+            if kind == "audio":
+                path.write_bytes(b"audio fixture")
+                return path
+            return self.write_photo(addresses, path)
+
+        with (
+            patch(
+                "douyin_downloader.application.service.capture_content",
+                return_value=(self.content, []),
+            ),
+            patch("douyin_downloader.application.service.download_asset", side_effect=transfer),
+            patch("douyin_downloader.application.service.compose_slideshow") as compose,
+        ):
+            with self.assertRaises(DynamicSourceUnavailable) as captured:
                 run_download(self.options)
+            self.assertTrue(captured.exception.policy_rejected)
+            self.assertEqual([p.suffix for p in captured.exception.files], [".png", ".mp3"])
+            self.assertTrue(all(path.is_file() for path in captured.exception.files))
+            compose.assert_not_called()
+        metadata = json.loads(next(self.folder.rglob("metadata.json")).read_text(encoding="utf-8"))
+        self.assertEqual(metadata["state"], "source_rejected")
+        self.assertFalse(list(self.folder.rglob("*.mp4")))
 
     def test_dynamic_download_failure_is_not_static_success(self):
         self.content.image_videos = {0: ("https://example/motion",)}
@@ -172,8 +295,10 @@ class ServiceTests(unittest.TestCase):
             patch("douyin_downloader.application.service.download_asset", side_effect=transfer),
             patch("douyin_downloader.application.service.compose_slideshow") as compose,
         ):
-            with self.assertRaisesRegex(DownloadError, "Motion cannot be preserved"):
+            with self.assertRaises(DynamicSourceUnavailable) as captured:
                 run_download(self.options)
+            self.assertFalse(captured.exception.policy_rejected)
+            self.assertEqual(len(captured.exception.files), 1)
             compose.assert_not_called()
 
     def test_static_cache_is_regenerated_when_motion_is_discovered(self):

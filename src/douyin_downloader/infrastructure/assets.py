@@ -7,7 +7,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from ..domain.models import DownloadError
+from ..domain.models import DownloadError, MediaRejectedError
 
 
 def sha256(path: Path) -> str:
@@ -46,8 +46,8 @@ def _read_validation() -> dict[str, str]:
 
 def require_accepted_asset(digest: str):
     reason = _read_validation().get(digest)
-    if reason:
-        raise DownloadError(f"Known watermarked media rejected. {reason}")
+    if reason is not None:
+        raise MediaRejectedError(f"Verified embedded watermark in source media. {reason}")
 
 
 def record_rejected_asset(path: Path, reason: str):

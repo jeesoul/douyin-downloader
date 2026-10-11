@@ -16,7 +16,9 @@ from ..domain.models import (
     DownloadError,
     DownloadOptions,
     DownloadResult,
+    DynamicSourceUnavailable,
     ExportCallback,
+    MediaRejectedError,
     StatusCallback,
     TransferCallback,
 )
@@ -55,6 +57,12 @@ def run_download(
     check_cancel(cancel)
     on_status("Parsing share link...")
     resolved = resolve_link(options.link)
+    LOGGER.info(
+        "Download started: post=%s kind=%s mode=%s",
+        resolved.aweme_id,
+        resolved.kind,
+        options.photo_mode,
+    )
     check_cancel(cancel)
     content, cookies = capture_content(resolved, options.show_browser, cancel, on_status)
     check_cancel(cancel)
@@ -81,25 +89,44 @@ def run_download(
             pass
     files = []
     warnings = []
+    existing_records = []
+    for name, record in previous.items():
+        candidate = folder / name
+        if Path(name).name != name or not candidate.is_file():
+            continue
+        if candidate.stat().st_size != record.get("size"):
+            continue
+        try:
+            require_accepted_asset(record.get("sha256"))
+        except MediaRejectedError:
+            continue
+        existing_records.append(record)
     metadata = {
         "version": __version__,
         "aweme_id": content.aweme_id,
         "kind": content.kind,
         "title": content.title,
         "author": content.author,
-        "files": list(previous.values()),
+        "files": existing_records,
         "warnings": warnings,
         "state": "in_progress",
         "source_policy": SOURCE_POLICY,
     }
     save_metadata(metadata_path, metadata)
 
-    def complete():
+    def complete(unavailable_motion=()):
         check_cancel(cancel)
-        metadata["state"] = "completed"
+        metadata["state"] = "partial" if unavailable_motion else "completed"
         metadata["warnings"] = warnings
+        metadata["unavailable_motion"] = list(unavailable_motion)
         save_metadata(metadata_path, metadata)
-        return DownloadResult(files, warnings)
+        LOGGER.info(
+            "Download finished: post=%s state=%s files=%s",
+            content.aweme_id,
+            metadata["state"],
+            len(files),
+        )
+        return DownloadResult(files, warnings, tuple(unavailable_motion))
 
     def remember(path: Path):
         if path not in files:
@@ -128,7 +155,11 @@ def run_download(
 
     def obtain(addresses, stem, suffix, kind):
         check_cancel(cancel)
-        result = cached(stem)
+        try:
+            result = cached(stem)
+        except MediaRejectedError:
+            LOGGER.info("Rejected cached asset %s; checking current declared sources.", stem)
+            result = None
         if result:
             on_status(f"Already downloaded: {result.name}")
             return result
@@ -155,24 +186,16 @@ def run_download(
             except DownloadCancelled:
                 raise
             except DownloadError as exc:
-                errors.append(redact(str(exc)))
-        raise DownloadError(errors[-1] if errors else "No downloadable video stream.")
+                errors.append(exc)
+        if errors and all(isinstance(error, MediaRejectedError) for error in errors):
+            raise MediaRejectedError("No accepted video source is available. " + str(errors[-1]))
+        raise DownloadError(redact(str(errors[-1])) if errors else "No downloadable video stream.")
 
     images = [
         obtain(addresses, f"image_{index + 1:03d}", ".image", "image")
         for index, addresses in enumerate(content.images)
     ]
-    image_videos = {}
-    for index, addresses in content.image_videos.items():
-        try:
-            image_videos[index] = obtain(addresses, f"live_{index + 1:03d}", ".mp4", "video")
-        except DownloadCancelled:
-            raise
-        except DownloadError as exc:
-            raise DownloadError(
-                f"Dynamic photo {index + 1} failed: {redact(str(exc))}. "
-                "Motion cannot be preserved without its video stream."
-            ) from exc
+    # 独立可用的图片和配乐先落盘，动态源不合格不能丢失这些已接受的素材。
     music = None
     if content.music_urls:
         try:
@@ -183,6 +206,47 @@ def run_download(
             warnings.append(f"Music could not be downloaded: {redact(str(exc))}")
     else:
         warnings.append("No downloadable background music is available for this post.")
+    image_videos = {}
+    motion_errors = {}
+    for index, addresses in content.image_videos.items():
+        try:
+            image_videos[index] = obtain(addresses, f"live_{index + 1:03d}", ".mp4", "video")
+        except DownloadCancelled:
+            raise
+        except DownloadError as exc:
+            motion_errors[index + 1] = exc
+            category = (
+                "source rejected" if isinstance(exc, MediaRejectedError) else "download failed"
+            )
+            warnings.append(f"Dynamic photo {index + 1}: {category}. {redact(str(exc))}")
+    if motion_errors:
+        missing = tuple(motion_errors)
+        metadata["unavailable_motion"] = list(missing)
+        if options.photo_mode == "originals":
+            return complete(missing)
+        policy_rejected = all(
+            isinstance(error, MediaRejectedError) for error in motion_errors.values()
+        )
+        message = (
+            "No accepted dynamic source is available: the provided streams contain a verified watermark."
+            if policy_rejected
+            else "Dynamic media could not be downloaded."
+        )
+        metadata["state"] = "source_rejected" if policy_rejected else "failed"
+        metadata["warnings"] = warnings
+        save_metadata(metadata_path, metadata)
+        LOGGER.warning(
+            "Download incomplete: post=%s state=%s files=%s missing_motion=%s",
+            content.aweme_id,
+            metadata["state"],
+            len(files),
+            missing,
+        )
+        raise DynamicSourceUnavailable(
+            message + " Accepted files were preserved. No replacement MP4 was exported.",
+            tuple(files),
+            policy_rejected,
+        )
     if options.photo_mode == "both":
         ensure_ffmpeg(cancel, on_status, on_progress)
         on_status("Exporting photo slideshow...")

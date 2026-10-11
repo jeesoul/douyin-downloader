@@ -6,11 +6,32 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from douyin_downloader.domain.models import DownloadCancelled, DownloadError, DownloadOptions
+from douyin_downloader.domain.models import (
+    DownloadCancelled,
+    DownloadError,
+    DownloadOptions,
+    DownloadResult,
+    DynamicSourceUnavailable,
+    MediaRejectedError,
+)
 from douyin_downloader.presentation import cli
 
 
 class CliTests(unittest.TestCase):
+    def test_cli_policy_rejection_has_distinct_exit_code(self):
+        with patch(
+            "douyin_downloader.application.service.run_download",
+            side_effect=MediaRejectedError("Embedded watermark"),
+        ):
+            self.assertEqual(cli.main(["https://www.douyin.com/video/123"]), 3)
+
+    def test_cli_partial_originals_has_distinct_exit_code(self):
+        result = DownloadResult([], ["Dynamic source unavailable"], (1,))
+        with patch("douyin_downloader.application.service.run_download", return_value=result):
+            self.assertEqual(
+                cli.main(["https://www.douyin.com/note/123", "--photo-mode", "originals"]), 2
+            )
+
     def test_windowed_mode_opens_gui_before_network(self):
         with (
             patch.object(cli.sys, "stdout", None),
@@ -24,6 +45,42 @@ class CliTests(unittest.TestCase):
 
 @unittest.skipUnless(os.environ.get("RUN_GUI_TESTS") == "1", "Enable RUN_GUI_TESTS=1 on a desktop")
 class GuiTests(unittest.TestCase):
+    def test_rejected_source_keeps_saved_folder_accessible(self):
+        import tkinter as tk
+
+        from douyin_downloader.presentation.gui import DownloaderApp
+
+        with tempfile.TemporaryDirectory() as name:
+            folder = Path(name)
+            saved = folder / "photo.png"
+            saved.write_bytes(b"accepted fixture")
+            root = tk.Tk()
+            errors = []
+            root.report_callback_exception = lambda *args: errors.append(args)
+
+            def runner(*_):
+                raise DynamicSourceUnavailable("No clean dynamic source", (saved,), True)
+
+            app = DownloaderApp(root, DownloadOptions("test", folder), folder / "log", runner)
+
+            def verify():
+                try:
+                    self.assertEqual(app.status.cget("text"), "Source rejected")
+                    self.assertEqual(str(app.folder_button.cget("state")), "normal")
+                    self.assertEqual(app.saved_folder, folder)
+                    self.assertIn(str(saved), app.detail.get("1.0", "end"))
+                    self.assertEqual(app.exit_code, 3)
+                    self.assertEqual(app.download_button.cget("text"), "Download")
+                except AssertionError as exc:
+                    errors.append(exc)
+                finally:
+                    root.destroy()
+
+            root.after(700, verify)
+            root.mainloop()
+            app.worker.join()
+            self.assertFalse(errors)
+
     def test_responsive_error_remains_visible_and_no_worker_tk_calls(self):
         import tkinter as tk
 

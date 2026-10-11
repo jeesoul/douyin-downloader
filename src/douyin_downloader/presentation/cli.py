@@ -4,7 +4,12 @@ import sys
 from pathlib import Path
 
 from .. import __version__
-from ..domain.models import DownloadCancelled, DownloadOptions
+from ..domain.models import (
+    DownloadCancelled,
+    DownloadOptions,
+    DynamicSourceUnavailable,
+    MediaRejectedError,
+)
 from ..infrastructure.runtime import app_dir, redact, setup_logging
 
 
@@ -66,9 +71,17 @@ def main(argv=None) -> int:
             print(f"[OK] {path}")
         for warning in result.warnings:
             print(f"[!] {warning}")
-        return 0
+        return 2 if result.unavailable_motion else 0
     except (KeyboardInterrupt, DownloadCancelled):
         return 130
+    except (DynamicSourceUnavailable, MediaRejectedError) as exc:
+        message = redact(str(exc))
+        rejected = isinstance(exc, MediaRejectedError) or exc.policy_rejected
+        logging.getLogger(__name__).warning("%s: %s", type(exc).__name__, message)
+        print(f"\n[{'REJECTED' if rejected else 'INCOMPLETE'}] {message}", file=sys.stderr)
+        for path in getattr(exc, "files", ()):
+            print(f"[SAVED] {path}")
+        return 3 if rejected else 1
     except Exception as exc:
         message = redact(str(exc))
         logging.getLogger(__name__).error("%s: %s", type(exc).__name__, message)
