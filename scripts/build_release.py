@@ -18,7 +18,7 @@ SOURCE_PATHS = (
     "src",
     "scripts",
     "tests",
-    "docs",
+    "docs/ARCHITECTURE.md",
     ".github",
     "pyproject.toml",
     "requirements.txt",
@@ -28,9 +28,6 @@ SOURCE_PATHS = (
     "THIRD_PARTY_NOTICES.md",
     ".gitignore",
     ".gitattributes",
-    "douyin_download.py",
-    "douyin_download.sh",
-    "下载抖音视频.bat",
 )
 
 
@@ -185,7 +182,7 @@ def build_windows(destination: Path) -> Path:
             f"{tcl_path};tcl8/8.6",
             "--add-data",
             f"{tk_path};_tk_data",
-            str(ROOT / "douyin_download.py"),
+            str(ROOT / "scripts" / "desktop_entry.py"),
         ],
         cwd=ROOT,
         check=True,
@@ -202,6 +199,20 @@ def main():
     args = parser.parse_args()
     dist = ROOT / "dist"
     dist.mkdir(exist_ok=True)
+    changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    heading = f"## {__version__}\n"
+    if heading not in changelog:
+        raise RuntimeError("The current version is missing from CHANGELOG.md.")
+    changes = changelog.split(heading, 1)[1].split("\n## ", 1)[0].strip()
+    notes = (
+        f"# 抖音素材下载小工具 {__version__}\n\n"
+        f"{changes}\n\n"
+        f"Windows 包：`douyin-downloader-{__version__}-windows-x64.zip`，解压后运行 `DouyinDownloader.exe`。\n"
+        "无需安装 Python；首次使用联网初始化 Chromium，图文导出按需下载 FFmpeg。\n\n"
+        "作者：dxy。原创代码采用 MIT 许可证，第三方组件保留其各自许可证。\n\n"
+        "仅供学习研究，请勿违法使用。请遵守适用法律法规和平台规则，尊重版权、隐私及其他合法权益。\n"
+    )
+    (dist / "RELEASE_NOTES.md").write_text(notes, encoding="utf-8")
     artifacts = []
     if not args.source_only:
         executable = build_windows(dist)

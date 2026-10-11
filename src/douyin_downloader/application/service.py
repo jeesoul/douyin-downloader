@@ -169,13 +169,17 @@ def run_download(
         obtain(addresses, f"image_{index + 1:03d}", ".image", "image")
         for index, addresses in enumerate(content.images)
     ]
+    image_videos = {}
     for index, addresses in content.image_videos.items():
         try:
-            obtain(addresses, f"live_{index + 1:03d}", ".mp4", "video")
+            image_videos[index] = obtain(addresses, f"live_{index + 1:03d}", ".mp4", "video")
         except DownloadCancelled:
             raise
         except DownloadError as exc:
-            warnings.append(f"Live photo {index + 1}: {redact(str(exc))}")
+            raise DownloadError(
+                f"Dynamic photo {index + 1} failed: {redact(str(exc))}. "
+                "Motion cannot be preserved without its video stream."
+            ) from exc
     music = None
     if content.music_urls:
         try:
@@ -193,6 +197,7 @@ def run_download(
         stem = "slideshow" if music else "slideshow_silent"
         inputs = {
             "images": [sha256(image) for image in images],
+            "motion": {str(index): sha256(video) for index, video in image_videos.items()},
             "audio": sha256(music) if music else None,
             "slide_seconds": options.slide_seconds,
             "version": __version__,
@@ -207,6 +212,7 @@ def run_download(
                     options.slide_seconds,
                     cancel,
                     on_export,
+                    videos=image_videos,
                 )
             )
         metadata["export_inputs"] = inputs

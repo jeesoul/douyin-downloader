@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""保留原启动文件名；业务实现位于 src/douyin_downloader。"""
+"""独立桌面程序入口；配置打包后的 Tcl/Tk，再启动统一 CLI/GUI。"""
 
 import os
 import sys
@@ -21,7 +21,7 @@ def prepare_runtime():
             if location.is_dir():
                 os.environ[variable] = str(location)
     else:
-        sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 
 if __name__ == "__main__":

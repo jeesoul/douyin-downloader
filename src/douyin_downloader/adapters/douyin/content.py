@@ -62,20 +62,21 @@ def decode_page_data(render_data: str | None, flight_data: list) -> list:
 
 def urls_from(value) -> tuple[str, ...]:
     if isinstance(value, dict):
-        value = value.get("url_list") or value.get("download_url_list") or []
+        value = value.get("url_list") or value.get("download_url_list") or value.get("src") or []
     if isinstance(value, str):
         value = [value]
     if not isinstance(value, list):
         return ()
-    return tuple(
-        dict.fromkeys(
-            u
-            for u in value
-            if isinstance(u, str)
-            and urlsplit(u).scheme in {"http", "https"}
-            and not is_watermarked_url(u)
-        )
-    )
+    addresses = []
+    for item in value:
+        address = item.get("src") if isinstance(item, dict) else item
+        if (
+            isinstance(address, str)
+            and urlsplit(address).scheme in {"http", "https"}
+            and not is_watermarked_url(address)
+        ):
+            addresses.append(address)
+    return tuple(dict.fromkeys(addresses))
 
 
 def video_urls(value) -> tuple[str, ...]:
@@ -128,9 +129,11 @@ def parse_content(aweme: dict, aweme_id: str) -> Content:
             )
         images.append(addresses)
         video = item.get("video") or {}
-        live = video_urls(video.get("play_addr"))
-        if live and float(video.get("duration") or 0) > 0:
+        live = video_urls(video.get("play_addr")) or video_urls(video.get("play_addr_h265"))
+        if live:
             image_videos[index] = live
+        elif item.get("live_photo_type") == 1:
+            raise DownloadError(f"Dynamic photo {index + 1} has no watermark-free video address.")
     author = data.get("author") or data.get("author_info") or {}
     music = data.get("music") or {}
     return Content(

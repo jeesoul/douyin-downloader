@@ -8,6 +8,7 @@ from douyin_downloader.adapters.douyin.content import (
     find_aweme,
     parse_content,
     quality_list,
+    urls_from,
 )
 from douyin_downloader.adapters.douyin.links import extract_url, parse_url, resolve_link
 from douyin_downloader.adapters.transfer import safe_name
@@ -54,6 +55,58 @@ class LinkTests(unittest.TestCase):
 
 
 class ContentTests(unittest.TestCase):
+    def test_src_object_addresses_preserve_dynamic_video(self):
+        address = "https://v.douyinvod.com/motion.mp4"
+        content = parse_content(
+            {
+                "images": [
+                    {
+                        "urlList": ["https://images.example/still.webp"],
+                        "livePhotoType": 1,
+                        "video": {"duration": 4067, "playAddr": [{"src": address}]},
+                    }
+                ],
+            },
+            "456",
+        )
+        self.assertEqual(content.image_videos, {0: (address,)})
+        self.assertEqual(urls_from({"src": address}), (address,))
+        self.assertEqual(urls_from([{"src": address}, {"src": address}, None]), (address,))
+
+    def test_dynamic_video_does_not_depend_on_duration_metadata(self):
+        address = "https://v.douyinvod.com/motion.mp4"
+        content = parse_content(
+            {
+                "images": [
+                    {
+                        "url_list": ["https://images.example/still.jpg"],
+                        "video": {"duration": 0, "play_addr": [{"src": address}]},
+                    }
+                ]
+            },
+            "456",
+        )
+        self.assertEqual(content.image_videos, {0: (address,)})
+
+    def test_dynamic_photo_with_only_watermarked_video_fails(self):
+        with self.assertRaisesRegex(DownloadError, "Dynamic photo"):
+            parse_content(
+                {
+                    "images": [
+                        {
+                            "url_list": ["https://images.example/still.jpg"],
+                            "live_photo_type": 1,
+                            "video": {
+                                "play_addr": [
+                                    {"src": "https://v.douyinvod.com/motion.mp4?watermark=1"}
+                                ]
+                            },
+                        }
+                    ]
+                },
+                "456",
+            )
+
     def test_photo_uses_clean_preview_and_rejects_watermark_fallback(self):
         original = "https://images.example/source~tplv-dy-aweme-images:q75.webp"
         watermarked = "https://images.example/source~tplv-dy-water-v2:fake.webp"

@@ -20,3 +20,9 @@ logs/
 .idea/
 .vscode/
 .DS_Store
+# 历史本地启动器与验收记录。
+/douyin_download.py
+/douyin_download.sh
+/下载抖音视频.bat
+/docs/VALIDATION.md
+/docs/RELEASE.md
