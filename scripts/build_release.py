@@ -194,11 +194,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-only", action="store_true")
     parser.add_argument(
+        "--output", type=Path, default=ROOT / "dist", help="Release output directory"
+    )
+    parser.add_argument(
         "--legacy-copy", action="store_true", help="Refresh the original local executable filename"
     )
     args = parser.parse_args()
-    dist = ROOT / "dist"
-    dist.mkdir(exist_ok=True)
+    dist = args.output.resolve()
+    dist.mkdir(parents=True, exist_ok=True)
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     heading = f"## {__version__}\n"
     if heading not in changelog:

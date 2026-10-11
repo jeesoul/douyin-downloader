@@ -81,6 +81,7 @@ python scripts/build_release.py
 ```
 
 独立 Windows 程序必须在 Windows 构建。构建输出位于 `dist/`，包含 Windows 包、源码包及 `SHA256SUMS`。
+可通过 `--output` 指定独立输出目录，避免覆盖正在运行的旧包。
 桌面环境下设置 `RUN_GUI_TESTS=1` 可执行 GUI 生命周期测试。
 
 代码按领域模型、流程编排、平台适配和界面分层。详见 [架构说明](docs/ARCHITECTURE.md)。
