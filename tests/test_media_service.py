@@ -17,6 +17,7 @@ from douyin_downloader.domain.models import (
     DownloadError,
     DownloadOptions,
 )
+from douyin_downloader.infrastructure.assets import record_rejected_asset
 
 
 class MediaTests(unittest.TestCase):
@@ -136,6 +137,25 @@ class MediaTests(unittest.TestCase):
 
 
 class ServiceTests(unittest.TestCase):
+    def test_rejected_cached_image_is_not_reused(self):
+        with (
+            patch(
+                "douyin_downloader.application.service.capture_content",
+                return_value=(self.content, []),
+            ),
+            patch(
+                "douyin_downloader.application.service.download_asset", side_effect=self.write_photo
+            ),
+            patch(
+                "douyin_downloader.infrastructure.assets.validation_path",
+                return_value=self.folder / "validation.json",
+            ),
+        ):
+            first = run_download(self.options)
+            record_rejected_asset(first.files[0], "Embedded mark verified.")
+            with self.assertRaisesRegex(DownloadError, "Known watermarked"):
+                run_download(self.options)
+
     def test_dynamic_download_failure_is_not_static_success(self):
         self.content.image_videos = {0: ("https://example/motion",)}
 

@@ -8,6 +8,7 @@ from pathlib import Path
 import requests
 
 from ..domain.models import DownloadCancelled, DownloadError, TransferCallback
+from ..infrastructure.assets import require_accepted_asset, sha256
 from ..infrastructure.runtime import check_cancel, redact
 from .douyin.addresses import is_watermarked_url
 from .douyin.links import USER_AGENT
@@ -82,6 +83,8 @@ def download_asset(
                 check_cancel(cancel)
                 if not written or (total and written != total):
                     raise DownloadError(f"Incomplete download ({written}/{total} bytes).")
+                # 地址看起来无水印并不代表画面干净，已核验的不合格文件不能作为兜底。
+                require_accepted_asset(sha256(temporary))
                 if kind == "image":
                     from PIL import Image
 

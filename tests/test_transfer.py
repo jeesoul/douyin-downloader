@@ -4,11 +4,13 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from unittest.mock import patch
 
 from PIL import Image
 
 from douyin_downloader.adapters.transfer import download_asset
 from douyin_downloader.domain.models import DownloadCancelled, DownloadError
+from douyin_downloader.infrastructure.assets import record_rejected_asset
 
 VIDEO = b"\x00\x00\x00\x18ftypisom" + b"\x00" * 180000
 
@@ -101,6 +103,17 @@ class TransferTests(unittest.TestCase):
         with self.assertRaises(DownloadError):
             download_asset([self.base + "/html"], self.directory / "video.mp4", [])
         self.assertFalse((self.directory / "video.mp4").exists())
+
+    def test_known_embedded_watermark_is_not_saved_as_clean_media(self):
+        reference = self.directory / "reference.mp4"
+        reference.write_bytes(VIDEO)
+        catalog = self.directory / "validation.json"
+        with patch("douyin_downloader.infrastructure.assets.validation_path", return_value=catalog):
+            record_rejected_asset(reference, "Embedded mark verified from decoded frames.")
+            with self.assertRaisesRegex(DownloadError, "Known watermarked"):
+                download_asset([self.base + "/ok"], self.directory / "result.mp4", [])
+        self.assertFalse((self.directory / "result.mp4").exists())
+        self.assertFalse(list(self.directory.glob("*.part")))
 
     def test_watermarked_candidate_and_redirect_are_rejected(self):
         for address in [self.base + "/video.mp4?watermark=1", self.base + "/redirect-watermark"]:

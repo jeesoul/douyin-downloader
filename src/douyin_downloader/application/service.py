@@ -1,4 +1,3 @@
-import hashlib
 import json
 import logging
 import os
@@ -21,19 +20,12 @@ from ..domain.models import (
     StatusCallback,
     TransferCallback,
 )
+from ..infrastructure.assets import require_accepted_asset, sha256
 from ..infrastructure.ffmpeg import ensure_ffmpeg
 from ..infrastructure.runtime import check_cancel, redact
 
 LOGGER = logging.getLogger(__name__)
 SOURCE_POLICY = "watermark-free-1"
-
-
-def sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def save_metadata(path: Path, data: dict):
@@ -130,6 +122,7 @@ def run_download(
                 and candidate.stat().st_size == record.get("size")
                 and sha256(candidate) == record.get("sha256")
             ):
+                require_accepted_asset(record["sha256"])
                 return remember(candidate)
         return None
 
