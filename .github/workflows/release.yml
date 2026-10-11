@@ -1,0 +1,40 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python -m pip install -r requirements.txt
+      - run: python -m pip install '.[build,dev]'
+      - name: Verify tag
+        shell: pwsh
+        run: |
+          python -c "import os; from douyin_downloader import __version__; assert os.environ['GITHUB_REF_NAME'] == 'v' + __version__, 'Tag and package version differ'"
+      - run: python -m ruff check src tests scripts douyin_download.py
+      - run: python -m ruff format --check src tests scripts douyin_download.py
+      - run: python -m unittest discover -s tests -v
+      - run: python scripts/build_release.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: douyin-downloader-release
+          path: |
+            dist/*.zip
+            dist/SHA256SUMS
+      - name: Publish release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $releaseAssets = @(Get-ChildItem -LiteralPath dist -File | Where-Object { $_.Extension -eq '.zip' -or $_.Name -eq 'SHA256SUMS' } | ForEach-Object { $_.FullName })
+          gh release create $env:GITHUB_REF_NAME @releaseAssets --repo $env:GITHUB_REPOSITORY --title "抖音素材下载小工具 $env:GITHUB_REF_NAME" --notes-file docs/RELEASE.md
